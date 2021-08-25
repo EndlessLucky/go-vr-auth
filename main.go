@@ -3,10 +3,31 @@ package main
 // Import our dependencies. We'll use the standard HTTP library as well as the gorilla router for this app
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	jwtmiddleware "github.com/auth0/go-jwt-middleware"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
+	"github.com/rs/cors"
 )
+
+type Response struct {
+	Message string `json:"message"`
+}
+
+type Jwks struct {
+	Keys []JSONWebKeys `json:"keys"`
+}
+
+type JSONWebKeys struct {
+	Kty string   `json:"kty"`
+	Kid string   `json:"kid"`
+	Use string   `json:"use"`
+	N   string   `json:"n"`
+	E   string   `json:"e"`
+	X5c []string `json:"x5c"`
+}
 
 /* We will first create a new type called Product
    This type will contain information about VR experiences */
@@ -27,6 +48,32 @@ var products = []Product{
 }
 
 func main() {
+	jwtMiddleware := jwtmiddleware.New(jwtmiddleware.Options{
+		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
+			// Verify 'aud' claim
+			aud := "YOUR_API_IDENTIFIER"
+			checkAud := token.Claims.(jwt.MapClaims).VerifyAudience(aud, false)
+			if !checkAud {
+				return token, errors.New("Invalid audience.")
+			}
+			// Verify 'iss' claim
+			iss := "https://YOUR_DOMAIN/"
+			checkIss := token.Claims.(jwt.MapClaims).VerifyIssuer(iss, false)
+			if !checkIss {
+				return token, errors.New("Invalid issuer.")
+			}
+
+			cert, err := getPemCert(token)
+			if err != nil {
+				panic(err.Error())
+			}
+
+			result, _ := jwt.ParseRSAPublicKeyFromPEM([]byte(cert))
+			return result, nil
+		},
+		SigningMethod: jwt.SigningMethodRS256,
+	})
+
 	// Here we are instantiating the gorilla/mux router
 	r := mux.NewRouter()
 
@@ -38,8 +85,14 @@ func main() {
 	r.Handle("/products", ProductsHandler).Methods("GET")
 	r.Handle("/products/{slug}/feedback", AddFeedbackHandler).Methods("POST")
 
+	// For dev only - Set up CORS so React client can consume our API
+	corsWrapper := cors.New(cors.Options{
+		AllowedMethods: []string{"GET", "POST"},
+		AllowedHeaders: []string{"Content-Type", "Origin", "Accept", "*"},
+	})
+
 	// Our application will run on port 8080. Here we declare the port and pass in our router.
-	http.ListenAndServe(":8080", r)
+	http.ListenAndServe(":8080", corsWrapper.Handler(r))
 }
 
 // Here we are implementing the NotImplemented handler. Whenever an API endpoint is hit
